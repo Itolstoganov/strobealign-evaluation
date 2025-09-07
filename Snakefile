@@ -23,27 +23,27 @@ N_READS = {
 }
 LONG_READ_LENGTHS = tuple(n for n in N_READS if n >= 1000)  # single-end only
 READ_LENGTHS = tuple(n for n in N_READS if n < 1000)
-READ_TYPES = ("illumina", "rsii", "ont")
-MODELS = {"rsii": "data/pbsim3/QSHMM-RSII.model", "ont": "data/pbsim3/QSHMM-ONT-HQ.model"}
+MODELS = {"sim1clr": "data/pbsim3/QSHMM-RSII.model", "sim1ont": "data/pbsim3/QSHMM-ONT-HQ.model"}
 
 GENOMES = ("fruitfly")
-LONG_READ_LENGTHS = (1000)
+LONG_READ_LENGTHS = (1000, 5000, 10000)
 READ_LENGTHS = (200)
 
-DATASETS = expand("{genome}-{read_length}-illumina", genome=GENOMES, read_length=READ_LENGTHS)
-ILLUMINA_LONG_DATASETS = expand("{genome}-{read_length}-illumina", genome=GENOMES, read_length=LONG_READ_LENGTHS)
-LONG_DATASETS = expand("{genome}-{read_length}-{read_type}", genome=GENOMES, read_length=LONG_READ_LENGTHS, read_type=READ_TYPES)
+DATASETS = expand("{genome}-{read_length}", genome=GENOMES, read_length=READ_LENGTHS)
+ILLUMINA_LONG_DATASETS = expand("{genome}-{read_length}", genome=GENOMES, read_length=LONG_READ_LENGTHS)
+LONG_DATASETS = expand("{genome}-{read_length}", genome=GENOMES, read_length=LONG_READ_LENGTHS)
 ENDS = ("pe", "se")
 
 VARIATION_SETTINGS = {
-    "sim1": "--snp-rate 0 --small-indel-rate 0 --sv-indel-rate 0 --sv-inversion-rate 0 --sv-translocation-rate 0 --sv-duplication-rate 0",
+    "sim1illumina": "",
     "sim3": "--snp-rate 0.001 --small-indel-rate 0.0001 --max-small-indel-size 50",
     "sim4": "--snp-rate 0.005 --small-indel-rate 0.0005 --max-small-indel-size 50",
     "sim5": "--snp-rate 0.005 --small-indel-rate 0.001 --max-small-indel-size 100",
     "sim6": "--snp-rate 0.05 --small-indel-rate 0.002 --max-small-indel-size 100",
 }
 SIM = ["sim0"] + list(VARIATION_SETTINGS)
-SIM = ["sim1", "sim3"]
+SIM = ["sim3"]
+LONG_SIM = SIM + ["sim1illumina","sim1clr","sim1ont"]
 
 
 wildcard_constraints:
@@ -59,7 +59,7 @@ rule:
     input:
         expand("datasets/{sim}/{ds}/{r}.fastq.gz", sim=SIM, ds=DATASETS, r=(1, 2)),
         expand("datasets/{sim}/{ds}/truth.bam", sim=SIM, ds=DATASETS + ILLUMINA_LONG_DATASETS),
-        expand("datasets/{sim}/{ds}/1.fastq.gz", sim=SIM, ds=LONG_DATASETS)
+        expand("datasets/{sim}/{ds}/1.fastq.gz", sim=LONG_SIM, ds=LONG_DATASETS)
 
 # Download genomes
 
@@ -162,11 +162,13 @@ rule mason_variator:
         fai="genomes/{genome}.fa.fai",
         mason_variator="bin/mason_variator",
         mason_materializer="bin/mason_materializer"
+    wildcard_constraints:
+        sim=r"(?!sim1clr|sim1ont|sim0).*"
     params:
         variation_settings=lambda wildcards: VARIATION_SETTINGS[wildcards.sim]
     shell:
         """
-        if [ "{wildcards.sim}" = "sim1" ]; then
+        if [ "{wildcards.sim}" = "sim1illumina" ]; then
             cp {input.fasta} {output.fasta}
             touch {output.vcf}
         else
@@ -187,17 +189,19 @@ def mason_simulator_parameters(wildcards):
 
 rule mason_simulator:
     output:
-        r1_fastq="datasets/{sim,sim[1-9]}/{genome}-{read_length}-illumina/1.fastq.gz",
-        r2_fastq="datasets/{sim,sim[1-9]}/{genome}-{read_length}-illumina/2.fastq.gz",
-        bam="datasets/{sim,sim[1-9]}/{genome}-{read_length}-illumina/truth.bam"
+        r1_fastq="datasets/{sim}/{genome}-{read_length}/1.fastq.gz",
+        r2_fastq="datasets/{sim}/{genome}-{read_length}/2.fastq.gz",
+        bam="datasets/{sim}/{genome}-{read_length}/truth.bam"
     input:
         fasta="genomes/{genome}.fa",
         vcf="variants/{sim}-{genome}.vcf",
         mason_simulator="bin/mason_simulator"
+    wildcard_constraints:
+        sim=r"(?!sim1clr|sim1ont|sim0).*"
     params:
         extra=mason_simulator_parameters,
         n_reads=lambda wildcards: N_READS[int(wildcards.read_length)],
-        vcf_arg=lambda wildcards: "" if wildcards.sim == "sim1" else f"-iv variants/{wildcards.sim}-{wildcards.genome}.vcf"
+        vcf_arg=lambda wildcards: "" if wildcards.sim == "sim1illumina" else f"-iv variants/{wildcards.sim}-{wildcards.genome}.vcf"
     log: "logs/mason_simulator/{sim}-{genome}-{read_length}-illumina.log"
     shell:
         "ulimit -n 16384"  # Avoid "Uncaught exception of type MasonIOException: Could not open right/single-end output file."
@@ -218,16 +222,18 @@ rule mason_simulator:
 
 rule mason_simulator_long:
     output:
-        fastq="datasets/{sim,sim[1-9]}/{genome}-{long_read_length}-illumina/1.fastq.gz",
-        bam="datasets/{sim,sim[1-9]}/{genome}-{long_read_length}-illumina/truth.bam"
+        fastq="datasets/{sim}/{genome}-{long_read_length}/1.fastq.gz",
+        bam="datasets/{sim}/{genome}-{long_read_length}/truth.bam"
     input:
         fasta="genomes/{genome}.fa",
         vcf="variants/{sim}-{genome}.vcf",
         mason_simulator="bin/mason_simulator"
+    wildcard_constraints:
+        sim=r"(?!sim1clr|sim1ont|sim0).*"
     params:
         n_reads=lambda wildcards: N_READS[int(wildcards.long_read_length)],
         fragment_length=lambda wildcards: int(int(wildcards.long_read_length) * 1.5),
-        vcf_arg=lambda wildcards: "" if wildcards.sim == "sim1" else f"-iv variants/{wildcards.sim}-{wildcards.genome}.vcf"
+        vcf_arg=lambda wildcards: "" if wildcards.sim == "sim1illumina" else f"-iv variants/{wildcards.sim}-{wildcards.genome}.vcf"
     log: "logs/mason_simulator/{sim}-{genome}-{long_read_length}-illumina.log"
     shell:
         "ulimit -n 16384"  # Avoid "Uncaught exception of type MasonIOException: Could not open right/single-end output file."
@@ -285,13 +291,13 @@ rule sim0_long:
 def pbsim_parameters(wildcards):
     mean_read_length = int(wildcards.long_read_length)
     result = "--length-mean {}".format(mean_read_length)
-    reference_path = "variants/" + wildcards.sim + "-" + wildcards.genome + ".fa"
+    reference_path = "genomes/" + wildcards.genome + ".fa"
     ref_len = 0
     with open(reference_path, "r") as ref:
         for line in ref:
             if not line.startswith('>'):
                 ref_len += len(line.strip())    
-    print("Reference lingth: {}".format(ref_len))
+    # print("Reference lingth: {}".format(ref_len))
     num_reads = N_READS[mean_read_length]
     depth = float(num_reads * mean_read_length) / float(ref_len)
     result += " --depth {}".format(depth)
@@ -300,18 +306,17 @@ def pbsim_parameters(wildcards):
 
 rule pbsim:
     output:
-        fastq="datasets/{sim,sim[2-9]}/{genome}-{long_read_length}-{read_type,(rsii|ont)}/1.fastq.gz",
-        maf="datasets/{sim,sim[1-9]}/{genome}-{long_read_length}-{read_type,(rsii|ont)}/truth.maf"
+        maf="datasets/{sim,sim1(clr|ont)}/{genome}-{long_read_length}/truth.maf"
     input:
-        fasta="variants/{sim}-{genome}.fa",
-        model=lambda wildcards: MODELS[wildcards.read_type]
-        # rsii_model="data/pbsim3/QSHMM-RSII.model",
+        fasta="genomes/{genome}.fa",
+        model=lambda wildcards: MODELS[wildcards.sim]
+        # clr_model="data/pbsim3/QSHMM-RSII.model",
         # ont_model="data/pbsim3/QSHMM-ONT-HQ.model",
     params:
         extra=pbsim_parameters,
-        outprefix="datasets/{sim}/pbsim-{genome}-{long_read_length}-{read_type}-tmp",
+        outprefix="datasets/{sim}/pbsim-{genome}-{long_read_length}-tmp",
         outid="S"
-    log: "logs/pbsim3/{sim}-{genome}-{long_read_length}-{read_type}.log"
+    log: "logs/pbsim3/{sim}-{genome}-{long_read_length}.log"
     shell:
         "pbsim"
         " --strategy wgs"
@@ -322,7 +327,7 @@ rule pbsim:
         " --id-prefix {params.outid}"
         " {params.extra}"
         " --length-sd 0"
-        "\ncat {params.outprefix}_*.fq.gz > {output.fastq}"
+        # "\ncat {params.outprefix}_*.fq.gz > {output.fastq}"
         "\ncat {params.outprefix}_*.maf.gz > {output.maf}.gz"
         "\npigz -d {output.maf}.gz"
         "\nrm {params.outprefix}_*"
@@ -331,9 +336,9 @@ rule pbsim:
 # Add ground truth to long read sim1
 rule sim1_truth:
     output:
-        fastq="datasets/sim1/{genome}-{long_read_length}-{read_type,(rsii|ont)}/1.fastq.gz"
+        fastq="datasets/{sim,sim1(clr|ont)}/{genome}-{long_read_length}/1.fastq.gz"
     input: 
-        maf="datasets/sim1/{genome}-{long_read_length}-{read_type,(rsii|ont)}/truth.maf",
+        maf="datasets/{sim,sim1(clr|ont)}/{genome}-{long_read_length}/truth.maf",
         fai="genomes/{genome}.fa.fai"
     shell:
         "paftools.js pbsim2fq {input.fai} {input.maf} | pigz > {output.fastq}"

@@ -8,7 +8,7 @@
 # - ecoli50 (fifty E. coli genomes)
 # - chrY (chromosome Y of CHM13)
 
-GENOMES = ("fruitfly", "maize", "CHM13", "rye")
+GENOMES = ("fruitfly", "maize", "CHM13")
 N_READS = {
     50: 1_000_000,
     75: 1_000_000,
@@ -25,7 +25,7 @@ LONG_READ_LENGTHS = tuple(n for n in N_READS if n >= 1000)  # single-end only
 READ_LENGTHS = tuple(n for n in N_READS if n < 1000)
 MODELS = {"sim1clr": "data/pbsim3/QSHMM-RSII.model", "sim1ont": "data/pbsim3/QSHMM-ONT-HQ.model"}
 
-GENOMES = ("fruitfly")
+# GENOMES = ("fruitfly")
 LONG_READ_LENGTHS = (1000, 5000, 10000)
 READ_LENGTHS = (200)
 
@@ -306,7 +306,7 @@ def pbsim_parameters(wildcards):
 
 rule pbsim:
     output:
-        maf="datasets/{sim,sim1(clr|ont)}/{genome}-{long_read_length}/truth.maf"
+        maf=temp("datasets/{sim,sim1(clr|ont)}/{genome}-{long_read_length}/truth.maf")
     input:
         fasta="genomes/{genome}.fa",
         model=lambda wildcards: MODELS[wildcards.sim]

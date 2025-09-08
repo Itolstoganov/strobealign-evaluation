@@ -81,6 +81,8 @@ def plot(
     g.set_axis_labels("Read length", label)
     legend_labels = ["Tool:"] + [name for key, name in tools.items()] + ["\nMode:"]
     assert modes == ["align"] or modes == ["map"] or modes == ["align", "map"]
+    # if modes == ["map"]:
+    #     modes = ["align", "map"]
     legend_labels += modes
     sns.move_legend(g, loc="right", labels=legend_labels)
 
@@ -140,7 +142,7 @@ def configure(config_path):
         if "color" in version:
             palette["strobealign-" + key] = version["color"]
 
-    modes = sorted(config.get("modes", ["align", "map"]))
+    modes = sorted(config.get("mode", ["align", "map"]))
 
     return palette, read_lengths, tools, modes
 

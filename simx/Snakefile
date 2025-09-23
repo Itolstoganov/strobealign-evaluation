@@ -113,7 +113,7 @@ def minimap2_profile(wildcards):
         return "map-pb"
     if (wildcards.dataset == "sim1ont"):
         return "map-ont"
-    return "hq"
+    return "lr:hq"
 
 
 def minimap2_index(wildcards):
@@ -164,8 +164,7 @@ rule minimap2_paf_single_end:
     output:
         paf="runs/minimap2/{dataset}-{genome}-{read_length}/se.paf.gz"
     input:
-        # index=minimap2_index,
-        genome="genomes/{genome}.fa",
+        index=minimap2_index,
         r1_fastq="datasets/{dataset}/{genome}-{read_length}/1.fastq.gz",
     log:
         "runs/minimap2/{dataset}-{genome}-{read_length}/se.paf.log"

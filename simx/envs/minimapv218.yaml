@@ -1,0 +1,21 @@
+name: minimapv218
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - _libgcc_mutex=0.1=conda_forge
+  - _openmp_mutex=4.5=2_gnu
+  - isa-l=2.31.1=hb9d3cd8_1
+  - k8=1.2=h6618dc6_3
+  - kernel-headers_linux-64=5.14.0=he073ed8_2
+  - libgcc=15.1.0=h767d61c_5
+  - libgcc-ng=15.1.0=h69a702a_5
+  - libgomp=15.1.0=h767d61c_5
+  - libstdcxx=15.1.0=h8f9b012_5
+  - libzlib=1.2.13=h4ab18f5_6
+  - minimap2=2.18=h5bf99c6_0
+  - python_abi=3.12=8_cp312
+  - sysroot_linux-64=2.34=h087de78_2
+  - tzdata=2025b=h78e105d_0
+  - zlib=1.2.13=h4ab18f5_6
+prefix: /home/yopican/mambaforge/envs/minimapv218

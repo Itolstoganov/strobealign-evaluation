@@ -102,6 +102,16 @@ rule minimap2_index:
         "minimap2 -x {wildcards.profile} -t {threads} -d {output} {input}"
 
 
+rule minimap218_index:
+    output: "genomes/{genome}.fa.{profile}.mm218index"
+    input: "genomes/{genome}.fa"
+    threads: 8
+    conda:
+	    "minimapv218"
+    shell:
+        "minimap2 -x {wildcards.profile} -t {threads} -d {output} {input}"
+
+
 def minimap2_profile(wildcards):
     """
     minimap2’s sr (short reads) profile is advantageous up to
@@ -132,6 +142,9 @@ def minimap2_index(wildcards):
     profile = minimap2_profile(wildcards)
     return f"genomes/{wildcards.genome}.fa.{profile}.mm2index"
 
+def minimap218_index(wildcards):
+    profile = minimap218_profile(wildcards)
+    return f"genomes/{wildcards.genome}.fa.{profile}.mm218index"
 
 rule minimap2_single_end:
     output:
@@ -193,7 +206,7 @@ rule minimap218_paf_single_end:
     output:
         paf="runs/minimapv218/{dataset}-{genome}-{read_length}/se.paf.gz"
     input:
-        index=minimap2_index,
+        index=minimap218_index,
         r1_fastq="datasets/{dataset}/{genome}-{read_length}/1.fastq.gz",
     log:
         "runs/minimapv218/{dataset}-{genome}-{read_length}/se.paf.log"
@@ -546,7 +559,6 @@ def csvs(wildcards):
             f"csv/{{prog}}/{{dataset}}-{wildcards.genome}-{{read_length}}/{wildcards.ends}.paf.csv",
             prog=(prog for prog in PROGRAMS if prog not in {"bwamem", "xmapper"}), dataset=datasets, read_length=read_lengths
         )
-        print(files)
     return files
 
 

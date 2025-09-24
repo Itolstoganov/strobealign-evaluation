@@ -66,6 +66,12 @@ set-resources:
   minimap2_paf_single_end:
     mem_mb: 24000
 
+  minimap218_index:
+    mem_mb: 32000
+
+  minimap218_paf_single_end:
+    mem_mb: 48000
+
   minimap2_paired_end:
     mem_mb: 24000
 

@@ -30,8 +30,9 @@ LONG_READ_DATASETS = ["ont", "clr", "hifi"]
 import itertools
 
 wildcard_constraints:
-    short_read_dataset=r"(?!clr|ont|hifi).*",
-    long_read_dataset=r"(clr|ont|hifi)"
+    short_read_dataset=r".*-illumina",
+    long_read_dataset=r".*-(clr|ont|hifi)",
+    read_type=r"illumina|ont|clr|hifi"
 
 localrules:
     result_csv, concat_csvs, concat_genome_csvs, plot_ends, plot_genomes, download_xmapper
@@ -107,16 +108,16 @@ rule minimap2_index:
 
 def minimap2_profile(wildcards):
     """
-    minimap2’s sr (short reads) profile is advantageous up to
+    minimap2's sr (short reads) profile is advantageous up to
     approximately read length 500
     """
     if (int(wildcards.read_length) <= 500):
         return "sr"
-    if (wildcards.dataset == "clr"):
+    if wildcards.dataset.endswith("-clr"):
         return "map-pb"
-    if (wildcards.dataset == "ont"):
+    if wildcards.dataset.endswith("-ont"):
         return "map-ont"
-    if (wildcards.dataset == "hifi"):
+    if wildcards.dataset.endswith("-hifi"):
         return "map-hifi"
     return "lr:hq"
 
@@ -414,8 +415,8 @@ rule lr_accuracy:
         fastq="datasets/{long_read_dataset}/{genome}-{read_length}/1.fastq.gz"
     params:
         only_r1=lambda w: " --only-r1" if w.ends == "se" else "",
-        ccs=lambda w: f" --ccs --fastq datasets/{w.long_read_dataset}/{w.genome}-{w.read_length}/1.fastq.gz" 
-            if w.long_read_dataset == "hifi" else ""
+        ccs=lambda w: f" --ccs --fastq datasets/{w.long_read_dataset}/{w.genome}-{w.read_length}/1.fastq.gz"
+            if w.long_read_dataset.endswith("-hifi") else ""
     shell:
         "python -m saeval.get_accuracy{params.only_r1} --truth {input.truth} --faidx {input.faidx} {params.ccs} --predicted_paf {input.paf} > {output.txt}.tmp"
         "\n mv -v {output.txt}.tmp {output.txt}"
@@ -445,10 +446,12 @@ rule result_csv:
         read_count="datasets/{dataset}/{genome}-{read_length}/{ends}.readcount.txt",
         log="runs/{prog}/{dataset}-{genome}-{read_length}/{ends}.{bampaf}.log",
     params:
-        typ=lambda wildcards: "map" if wildcards.bampaf == "paf" else "align"
+        typ=lambda wildcards: "map" if wildcards.bampaf == "paf" else "align",
+        sim=lambda wildcards: wildcards.dataset.split("-")[0],
+        read_type=lambda wildcards: wildcards.dataset.split("-")[1]
     shell:
         """
-        echo -n {wildcards.prog},{params.typ},{wildcards.dataset},{wildcards.genome},{wildcards.ends},{wildcards.read_length}, > {output.csv}.tmp
+        echo -n {wildcards.prog},{params.typ},{params.sim},{params.read_type},{wildcards.genome},{wildcards.ends},{wildcards.read_length}, > {output.csv}.tmp
         echo -n $(< {input.read_count}), >> {output.csv}.tmp
         cut -f1,3 {input.txt} | tr '\\t' , | tr -d '\\n' >> {output.csv}.tmp
         echo -n , >> {output.csv}.tmp
@@ -465,6 +468,9 @@ rule result_csv:
 
 def csvs(wildcards):
     files = []
+    def is_long_read_dataset(ds):
+        return any(ds.endswith(f"-{lrd}") for lrd in LONG_READ_DATASETS)
+
     if "align" in MODES:
         for prog, dataset, read_length in itertools.product(PROGRAMS, DATASETS, READ_LENGTHS):
             if read_length >= LONG_READ_LENGTH and wildcards.ends == "pe":
@@ -474,16 +480,16 @@ def csvs(wildcards):
             if prog == "xmapper" and wildcards.genome == "rye":
                 # X-Mapper crashes on rye
                 continue
-            if dataset in LONG_READ_DATASETS:
+            if is_long_read_dataset(dataset):
                 continue
             files.append(f"csv/{prog}/{dataset}-{wildcards.genome}-{read_length}/{wildcards.ends}.bam.csv")
     if "map" in MODES:
         datasets_lengths = []
         for prog, dataset, read_length in itertools.product(PROGRAMS, DATASETS, READ_LENGTHS):
-            if read_length < LONG_READ_LENGTH and dataset in LONG_READ_DATASETS:
+            if read_length < LONG_READ_LENGTH and is_long_read_dataset(dataset):
                     continue
             if wildcards.ends == "pe":
-                if read_length >= LONG_READ_LENGTH or dataset in LONG_READ_DATASETS:
+                if read_length >= LONG_READ_LENGTH or is_long_read_dataset(dataset):
                     continue
             if prog not in {"bwamem", "xmapper"}:
                 files.append(f"csv/{prog}/{dataset}-{wildcards.genome}-{read_length}/{wildcards.ends}.paf.csv")
@@ -494,7 +500,7 @@ rule concat_csvs:
     output: "csv/{genome,([^/]*)}-{ends,(se|pe)}.csv"
     input: csvs
     shell:
-        "( echo tool,mode,dataset,genome,ends,read_length,read_count,aligned,overaligned,accuracy,jaccuracy,saccuracy,time,memory ; cat {input} ) > {output}"
+        "( echo tool,mode,dataset,read_type,genome,ends,read_length,read_count,aligned,overaligned,accuracy,jaccuracy,saccuracy,time,memory ; cat {input} ) > {output}"
 
 
 rule concat_genome_csvs:

@@ -3,6 +3,7 @@ configfile: "config.yaml"
 MODES = config.get("modes", ("align", "map"))
 ENDS = config.get("ends", ("se", "pe"))
 DATASETS = config["datasets"]
+READ_TYPES = config["read-types"]
 GENOMES = config["genomes"]
 READ_LENGTHS = config["read-lengths"]
 
@@ -25,7 +26,7 @@ if config["programs"]:
 PLOTS = ("accuracy", "aligned", "time", "memory")
 # For reads shorter than this, the evaluation includes paired-end data
 LONG_READ_LENGTH = 1000
-LONG_READ_DATASETS = ["ont", "clr", "hifi"]
+LONG_READ_TYPES = ["ont", "clr", "hifi"]
 
 import itertools
 
@@ -409,16 +410,13 @@ rule lr_accuracy:
     output:
         txt="runs/{program}/{long_read_dataset}-{genome}-{read_length}/{ends}.paf.accuracy.txt"
     input:
-        truth="datasets/{long_read_dataset}/{genome}-{read_length}/truth.maf.gz",
-        faidx="genomes/{genome}.fa.fai",
-        paf="runs/{program}/{long_read_dataset}-{genome}-{read_length}/{ends}.paf.gz",
-        fastq="datasets/{long_read_dataset}/{genome}-{read_length}/1.fastq.gz"
+        truth="datasets/{long_read_dataset}/{genome}-{read_length}/truth.bed",
+        paf="runs/{program}/{long_read_dataset}-{genome}-{read_length}/{ends}.paf.gz"
+        # fastq="datasets/{long_read_dataset}/{genome}-{read_length}/1.fastq.gz"
     params:
-        only_r1=lambda w: " --only-r1" if w.ends == "se" else "",
-        ccs=lambda w: f" --ccs --fastq datasets/{w.long_read_dataset}/{w.genome}-{w.read_length}/1.fastq.gz"
-            if w.long_read_dataset.endswith("-hifi") else ""
+        only_r1=lambda w: " --only-r1" if w.ends == "se" else ""
     shell:
-        "python -m saeval.get_accuracy{params.only_r1} --truth {input.truth} --faidx {input.faidx} {params.ccs} --predicted_paf {input.paf} > {output.txt}.tmp"
+        "python -m saeval.get_accuracy{params.only_r1} --truth {input.truth} --predicted_paf {input.paf} > {output.txt}.tmp"
         "\n mv -v {output.txt}.tmp {output.txt}"
 
 
@@ -451,7 +449,7 @@ rule result_csv:
         read_type=lambda wildcards: wildcards.dataset.split("-")[1]
     shell:
         """
-        echo -n {wildcards.prog},{params.typ},{params.sim},{params.read_type},{wildcards.genome},{wildcards.ends},{wildcards.read_length}, > {output.csv}.tmp
+        echo -n {wildcards.prog},{params.typ},{params.sim}-{params.read_type},{wildcards.genome},{wildcards.ends},{wildcards.read_length}, > {output.csv}.tmp
         echo -n $(< {input.read_count}), >> {output.csv}.tmp
         cut -f1,3 {input.txt} | tr '\\t' , | tr -d '\\n' >> {output.csv}.tmp
         echo -n , >> {output.csv}.tmp
@@ -468,11 +466,13 @@ rule result_csv:
 
 def csvs(wildcards):
     files = []
-    def is_long_read_dataset(ds):
-        return any(ds.endswith(f"-{lrd}") for lrd in LONG_READ_DATASETS)
+    # def is_long_read_dataset(ds):
+    #     return any(ds.endswith(f"-{lrd}") for lrd in LONG_READ_DATASETS)
 
     if "align" in MODES:
-        for prog, dataset, read_length in itertools.product(PROGRAMS, DATASETS, READ_LENGTHS):
+        for prog, dataset, read_type, read_length in itertools.product(PROGRAMS, DATASETS, READ_TYPES, READ_LENGTHS):
+            if read_type in LONG_READ_TYPES:
+                continue
             if read_length >= LONG_READ_LENGTH and wildcards.ends == "pe":
                 continue
             if prog == "xmapper" and read_length >= LONG_READ_LENGTH:
@@ -480,19 +480,17 @@ def csvs(wildcards):
             if prog == "xmapper" and wildcards.genome == "rye":
                 # X-Mapper crashes on rye
                 continue
-            if is_long_read_dataset(dataset):
-                continue
-            files.append(f"csv/{prog}/{dataset}-{wildcards.genome}-{read_length}/{wildcards.ends}.bam.csv")
+            files.append(f"csv/{prog}/{dataset}-{read_type}-{wildcards.genome}-{read_length}/{wildcards.ends}.bam.csv")
     if "map" in MODES:
         datasets_lengths = []
-        for prog, dataset, read_length in itertools.product(PROGRAMS, DATASETS, READ_LENGTHS):
-            if read_length < LONG_READ_LENGTH and is_long_read_dataset(dataset):
-                    continue
+        for prog, dataset, read_type, read_length in itertools.product(PROGRAMS, DATASETS, READ_TYPES, READ_LENGTHS):
+            if read_length < LONG_READ_LENGTH and read_type in LONG_READ_TYPES:
+                continue
             if wildcards.ends == "pe":
-                if read_length >= LONG_READ_LENGTH or is_long_read_dataset(dataset):
+                if read_length >= LONG_READ_LENGTH or read_type in LONG_READ_TYPES:
                     continue
             if prog not in {"bwamem", "xmapper"}:
-                files.append(f"csv/{prog}/{dataset}-{wildcards.genome}-{read_length}/{wildcards.ends}.paf.csv")
+                files.append(f"csv/{prog}/{dataset}-{read_type}-{wildcards.genome}-{read_length}/{wildcards.ends}.paf.csv")
     return files
 
 
@@ -500,7 +498,7 @@ rule concat_csvs:
     output: "csv/{genome,([^/]*)}-{ends,(se|pe)}.csv"
     input: csvs
     shell:
-        "( echo tool,mode,dataset,read_type,genome,ends,read_length,read_count,aligned,overaligned,accuracy,jaccuracy,saccuracy,time,memory ; cat {input} ) > {output}"
+        "( echo tool,mode,dataset,genome,ends,read_length,read_count,aligned,overaligned,accuracy,jaccuracy,saccuracy,time,memory ; cat {input} ) > {output}"
 
 
 rule concat_genome_csvs:

@@ -40,7 +40,7 @@ VARIATION_SETTINGS = {
     "sim6": "--snp-rate 0.05 --small-indel-rate 0.002 --max-small-indel-size 100",
 }
 SIM = ["sim0", "sim0p1"] + list(VARIATION_SETTINGS)
-SIM = ["sim0", "sim1", "sim3"]
+SIM = ["sim1", "sim3"]
 LONG_SIM = ["ont", "hifi", "clr"]
 
 
@@ -48,7 +48,8 @@ wildcard_constraints:
     read_length=r"\d{2,3}",
     long_read_length=r"\d{4,5}",
     sim01=r"sim(0|0p1)",
-    read_type=r"illumina|ont|clr|hifi"
+    read_type=r"illumina|ont|clr|hifi",
+    long_read_type=r"ont|clr|hifi"
 
 
 localrules:
@@ -59,8 +60,9 @@ rule:
     input:
         expand("datasets/{sim}-illumina/{ds}/{r}.fastq.gz", sim=SIM, ds=DATASETS, r=(1, 2)),
         expand("datasets/{sim}-illumina/{ds}/truth.bam", sim=SIM, ds=DATASETS + LONG_DATASETS),
-        expand("datasets/{sim}-{read_type}/{ds}/1.fastq.gz", sim=list(VARIATION_SETTINGS), read_type=["ont", "clr", "hifi"], ds=LONG_DATASETS),
-        expand("datasets/{sim}-{read_type}/{ds}/truth.maf.gz", sim=list(VARIATION_SETTINGS), read_type=["ont", "clr", "hifi"], ds=LONG_DATASETS)
+        expand("datasets/{sim}-{read_type}/{ds}/1.fastq.gz", sim=SIM, read_type=["ont", "clr"], ds=LONG_DATASETS),
+        # expand("datasets/{sim}-{read_type}/{ds}/truth.maf.gz", sim=list(VARIATION_SETTINGS), read_type=["ont", "clr"], ds=LONG_DATASETS)
+        expand("datasets/{sim}-{read_type}/{ds}/truth.bed", sim=SIM, read_type=["ont", "clr", "hifi"], ds=LONG_DATASETS)
 
 # Download genomes
 
@@ -194,22 +196,49 @@ rule extract_chry:
 
 rule mason_variator:
     output:
-        vcf="variants/{sim,sim[1-9]}-{genome}.vcf"
+        vcf="variants/{sim,sim[1-9]}-{genome}.vcf",
+        fasta="variants/{sim,sim[1-9]}-{genome}.tmp.fa"
     input:
         fasta="genomes/{genome}.fa",
         fai="genomes/{genome}.fa.fai",
-        mason_variator="bin/mason_variator"
+        mason_variator="bin/mason_variator",
+        mason_materializer="bin/mason_materializer"
     params:
         variation_settings=lambda wildcards: VARIATION_SETTINGS[wildcards.sim]
     shell:
         """
         if [ "{wildcards.sim}" = "sim1" ]; then
             touch {output.vcf}
+            ln -sfr {input.fasta} {output.fasta}
         else
             {input.mason_variator} -ir {input.fasta} {params.variation_settings} -ov {output.vcf}.tmp.vcf
             mv -v {output.vcf}.tmp.vcf {output.vcf}
+            {input.mason_materializer} -ir {input.fasta} -iv {output.vcf} -o {output.fasta}
         fi
         """
+
+rule allele_removal:
+    input:
+        fasta="variants/{sim,sim[2-9]}-{genome}.tmp.fa"
+    output:
+        fasta="variants/{sim,sim[2-9]}-{genome}.fa"
+    run:
+        from Bio import SeqIO
+
+        with open(input.fasta) as fa_in, open(output.fasta, "w") as fa_out:
+            for record in SeqIO.FastaIO.FastaIterator(fa_in):
+                if not record.id.endswith("/1"):
+                    raise ValueError(f"{record.id} does not end with /1, check if {input.fasta} was produced by mason_materializer")
+                fa_out.write(f">{record.id[:-2]}\n{record.seq}\n")
+
+
+rule sim1_allele_removal:
+    input:
+        fasta="genomes/{genome}.fa"
+    output:
+        fasta="variants/{sim,sim1}-{genome}.fa"
+    shell:
+        "ln -sfr {input.fasta} {output.fasta}"
 
 
 def mason_simulator_parameters(wildcards):
@@ -352,7 +381,7 @@ rule pbsim:
         maf="datasets/{sim,sim[1-9]}-{read_type,clr|ont}/{genome}-{long_read_length}/truth.maf.gz",
         fastq="datasets/{sim,sim[1-9]}-{read_type,clr|ont}/{genome}-{long_read_length}/1.fastq.gz"
     input:
-        fasta="genomes/{genome}.fa",
+        fasta="variants/{sim,sim[1-9]}-{genome}.fa",
         model=lambda wildcards: MODELS[wildcards.read_type]
     params:
         extra=pbsim_parameters,
@@ -381,7 +410,7 @@ rule pbsim_hifi:
         maf="datasets/{sim,sim[1-9]}-{read_type,hifi}/{genome}-{long_read_length}/truth.maf.gz",
         bam=temp("datasets/{sim,sim[1-9]}-{read_type,hifi}/{genome}-{long_read_length}/1.bam")
     input:
-        fasta="genomes/{genome}.fa",
+        fasta="variants/{sim,sim[1-9]}-{genome}.fa",
         model=lambda wildcards: MODELS[wildcards.read_type]
     params:
         extra=pbsim_parameters,
@@ -419,6 +448,219 @@ rule ccs:
         ccs --log-file {log} -j {threads} {input.bam} {output.fastq}
         """
 
+
+# Add allele fields to vcf for g2gtools
+rule convert_vcf:
+    input: 
+        vcf="variants/{sim,sim[1-9]}-{genome}.vcf"
+    output: 
+        vcf="variants/{sim,sim[1-9]}-{genome}-g2g.vcf"
+    run:
+        from pysam import VariantFile
+
+        vcf_in = VariantFile(input.vcf, 'r')
+        vcf_in.header.formats.add("GT", "1", "String", "Genotype")
+        vcf_in.header.formats.add("GQ", "1", "Integer", "Genotype Quality")
+        vcf_in.header.formats.add("DP", "1", "Integer", "Read Depth")
+
+        vcf_out = VariantFile(output.vcf, 'w', header=vcf_in.header)
+
+        for record in vcf_in:
+            for sample in record.samples:
+                record.samples[sample]['GT'] = (1, 1)  # 1/1 genotype
+                record.samples[sample]['GQ'] = 99
+                record.samples[sample]['DP'] = 10
+
+            vcf_out.write(record)
+
+
+# Make inverse vcf from the variated reference to the original for the ground truth liftover
+# Taken from https://github.com/samtools/bcftools/issues/2096
+rule invert_vcf:
+    input:
+        vcf="variants/{sim,sim[1-9]}-{genome}-g2g.vcf"
+    output:
+        vcf="variants/{sim,sim[1-9]}-{genome}-g2g-inverse.vcf"
+    run:
+        from collections import defaultdict
+
+        with open(output.vcf, "w") as f_out, open(input.vcf, "r") as f_in:
+            offset_counter = defaultdict(int)
+            for line in f_in:
+                if line.startswith("#"):
+                    print(line.strip(), file=f_out)
+                    continue
+
+                fields = line.strip().split("\t")
+                ref = fields[3]
+                alt = fields[4]
+                pos = int(fields[1])
+                chrom = fields[0]
+                offset = offset_counter[chrom]
+                new_alt = ref
+                new_ref = alt
+                new_pos = pos + offset
+                record_offset = len(alt) - len(ref)
+                offset_counter[chrom] += record_offset
+                fields[1] = str(new_pos)
+                fields[3] = new_ref
+                fields[4] = new_alt
+                print("\t".join(fields), file=f_out)
+
+
+rule sort_vcf:
+    input:
+        vcf="variants/{sim,sim[1-9]}-{genome}-g2g-inverse.vcf"
+    output:
+        vcf="variants/{sim,sim[1-9]}-{genome}-g2g-inverse.vcf.gz",
+        tbi="variants/{sim,sim[1-9]}-{genome}-g2g-inverse.vcf.gz.tbi"
+    shell:
+        """
+        bcftools sort -m 2G {input.vcf} | bgzip --stdout > {output.vcf}
+        tabix {output.vcf}
+        """
+
+
+def parse_maf_alignment(alignment, ref_index_to_name: dict, consensus_names=None):
+    if len(alignment) != 2:
+        raise ValueError(f"{maf_path} should contain 2 alignments per entry, please make sure that it was produced by pbsim3")
+
+    ref_seq = None
+    read_seq = None
+
+    for seq_record in alignment:
+        if seq_record.id == "ref":
+            ref_seq = seq_record
+        elif seq_record.id.startswith("S"):
+            read_seq = seq_record
+
+    if ref_seq is None or read_seq is None:
+        raise ValueError(f"""{alignment} entry in {maf_path} should contain entries for \"ref\" 
+                                and \"S<>_<>\", please make sure that {maf_path} was produced by pbsim3""")
+
+    read_name = read_seq.id
+    ref_index = None
+    read_index = None
+    if not consensus_names:
+        match = re.match(r'S(\d+)_(\d+)', read_name)
+        if not match:
+            raise ValueError(f"Read name {read_name} does not match expected format S<reference_index>_<read id>")
+        ref_index = int(match.group(1))
+    else:
+        match = re.match(r'S(\d+)/(\d+)/(\d+)', read_name)
+        if not match:
+            raise ValueError(f"Read name {read_name} does not match expected format S<reference id>/<read id>/<pass id>")
+        ref_index = int(match.group(1))
+        read_index = int(match.group(2))
+    
+    if ref_index - 1 not in ref_index_to_name:
+        raise ValueError(f"Reference index {ref_index - 1} not found in reference index file")
+    ref_name = ref_index_to_name[ref_index - 1]
+
+    ref_start = ref_seq.annotations["start"]
+    ref_end = ref_start + ref_seq.annotations["size"]
+
+    if not consensus_names:
+        query_name = read_name
+    else:
+        query_name = f"S{ref_index}/{read_index}/ccs"
+        if query_name not in consensus_names:
+            return None
+    # if not query_name.endswith("/1"):
+    #     query_name += "/1"
+    # print(read_seq.__dict__)
+    query_or = "+" if read_seq.annotations["strand"] == 1 else "-"
+
+    return query_name, query_or, ref_name, ref_start, ref_end
+
+
+rule long_read_truth:
+    input:
+        fai="variants/{sim,sim[1-9]}-{genome}.fa.fai",
+        maf="datasets/{sim,sim[1-9]}-{read_type,clr|ont|hifi}/{genome}-{long_read_length}/truth.maf.gz",
+        fastq="datasets/{sim,sim[1-9]}-{read_type,clr|ont|hifi}/{genome}-{long_read_length}/1.fastq.gz"
+    output:
+        bed="datasets/{sim,sim[1-9]}-{read_type,clr|ont|hifi}/{genome}-{long_read_length}/truth-unlifted.bed"
+    params:
+        consensus_names=lambda wildcards: 0 if wildcards.read_type != "hifi" else 1
+    run:
+        from xopen import xopen
+        from Bio import AlignIO
+        from pysam import FastxFile
+
+        read_positions = {}
+
+        ref_index_to_name = {}
+        with open(input.fai) as fai_file:
+            for line_num, line in enumerate(fai_file):
+                ref_name = line.strip().split('\t')[0]
+                ref_index_to_name[line_num] = ref_name
+        print(ref_index_to_name)
+
+        consensus_names = None
+        if params.consensus_names == 1:
+            with FastxFile(input.fastq) as fastq_file:
+                consensus_names = {read.name for read in fastq_file}
+
+        with xopen(input.maf) as maf_file, open(output.bed, "w") as bed_file:
+            alignments = AlignIO.parse(maf_file, "maf")
+            for alignment in alignments:
+                parsed_maf_alignment = parse_maf_alignment(alignment, ref_index_to_name, consensus_names)
+                if parsed_maf_alignment:
+                    query_name, query_or, ref_name, ref_start, ref_end = parsed_maf_alignment
+                    bed_file.write(f"{ref_name}\t{ref_start}\t{ref_end}\t{query_name}\t0\t{query_or}\n")
+
+
+rule sim1_gt:
+    input:
+        bed="datasets/{sim,sim1}-{long_read_type}/{genome}-{long_read_length}/truth-unlifted.bed"
+    output:
+        bed="datasets/{sim,sim1}-{long_read_type}/{genome}-{long_read_length}/truth.bed"
+    shell:
+        """
+        cp {input.bed} {output.bed}
+        """
+
+
+rule ref_transform:
+    input:
+        fasta="variants/{sim,sim[2-9]}-{genome}.fa",
+        vcf="variants/{sim,sim[2-9]}-{genome}-g2g-inverse.vcf.gz",
+        tbi="variants/{sim,sim[2-9]}-{genome}-g2g-inverse.vcf.gz.tbi"
+    output:
+        # TODO check if the double-inverted fasta is the same as the original
+        fasta="variants/{sim,sim[2-9]}-{genome}-inverted.fa",
+        vci="variants/{sim,sim[2-9]}-{genome}-inverse.vci.gz"
+    params:
+        outprefix="variants/{sim,sim[2-9]}-{genome}-inverted",
+        outvci="variants/{sim,sim[2-9]}-{genome}-inverse.vci"
+    singularity:
+        "docker://churchilllab/g2gtools:3.0.0"
+    shell:
+        """
+        g2gtools vcf2vci --vci {params.outvci} --vcf {input.vcf} --fasta {input.fasta} --strain simulated -v
+        g2gtools patch --fasta {input.fasta} --vci {output.vci} --out {params.outprefix}.patched.fa
+        g2gtools transform --fasta {params.outprefix}.patched.fa --vci {output.vci} --out {output.fasta}
+        """
+
+
+rule gt_liftover:
+    input:
+        gt="datasets/{sim,sim[2-9]}-{long_read_type}/{genome}-{long_read_length}/truth-unlifted.bed",
+        vci="variants/{sim,sim[2-9]}-{genome}-inverse.vci.gz"
+        # fasta="variants/{sim,sim[1-9]}-{genome}.fa"
+    output:
+        gt="datasets/{sim,sim[2-9]}-{long_read_type}/{genome}-{long_read_length}/truth.bed"
+        # fasta="datasets/{dataset_id}/ref.fa"
+    # params:
+        # unmapped="datasets/{dataset_id}/ref_ground_truth.bed.unmapped"
+    singularity:
+        "docker://churchilllab/g2gtools:3.0.0"
+    shell:
+        """
+        g2gtools convert --in {input.gt} --vci {input.vci} -f BED --out {output.gt}
+        """
+
 # Misc
 
 rule samtools_faidx:
@@ -437,13 +679,13 @@ rule clone_seqan:
 
 
 rule build_mason:
-    output: "bin/mason_variator", "bin/mason_simulator"
+    output: "bin/mason_variator", "bin/mason_simulator", "bin/mason_materializer"
     input: "seqan/cloned"
     threads: 99
     shell:
         "cmake -DSEQAN_BUILD_SYSTEM=APP:mason2 -DSEQAN_ARCH_SSE4=1 -B build-seqan seqan; "
         "cmake --build build-seqan -j {threads}; "
-        "mv build-seqan/bin/mason_simulator build-seqan/bin/mason_variator bin/"
+        "mv build-seqan/bin/mason_simulator build-seqan/bin/mason_variator build-seqan/bin/mason_materializer bin/"
         #"; rm -r seqan"
 
 

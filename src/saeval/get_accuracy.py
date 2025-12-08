@@ -191,26 +191,15 @@ def parse_maf_alignment(alignment, consensus_names: dict, ref_index_to_name: dic
     return query_name, ReferenceInterval(ref_name, ref_start, ref_end)
 
 
-def read_maf(maf_path: Path, ref_index_path: Path, fastq_path: Path, ccs_names: bool):
+def read_bed(bed_path: Path):
     read_positions = {}
 
-    ref_index_to_name = {}
-    with open(ref_index_path) as fai_file:
-        for line_num, line in enumerate(fai_file):
-            ref_name = line.strip().split('\t')[0]
-            ref_index_to_name[line_num] = ref_name
-
-    consensus_names = None
-    if ccs_names:
-        with FastxFile(fastq_path) as fastq_file:
-            consensus_names = {read.name for read in fastq_file}
-
-    with xopen(maf_path) as maf_file:
-        alignments = AlignIO.parse(maf_file, "maf")
-        for alignment in alignments:
-            query_name, ref_interval = parse_maf_alignment(alignment)
-            if query_name and ref_interval:
-                read_positions[query_name] = ref_interval
+    with open(bed_path, "r") as bed_handle:
+        for line in bed_handle:
+            ref_name, ref_start, ref_end, query_name, _, _ = line.strip().split()
+            if not query_name.endswith("/1") and not query_name.endswith("/2"):
+                query_name += "/1"
+            read_positions[query_name] = ReferenceInterval(ref_name, int(ref_start), int(ref_end))
 
     return read_positions
 
@@ -521,8 +510,8 @@ def measure_accuracy(
 ) -> Accuracy:
 
     if force_paf or predicted.name.endswith(".paf") or predicted.name.endswith(".paf.gz"):
-        if truth.name.endswith(".maf") or truth.name.endswith(".maf.gz"):
-            truth = read_maf(truth, faidx, fastq, ccs_names)
+        if truth.name.endswith(".bed"):
+            truth = read_bed(truth)
         else:
             truth = read_alignments(truth, skip_r2)
         predicted, mapped_to_multiple_pos = read_paf(predicted)
@@ -554,10 +543,10 @@ if __name__ == "__main__":
     parser.add_argument("--recompute-score", default=False, action="store_true", help="Recompute score in *predicted* BAM. Default: Use score from AS tag")
     parser.add_argument("--multiple-primary", default=False, action="store_true", help="Allow multiple primary alignments (violates SAM specification) and pick one randomly")
     parser.add_argument("--synthesize-unmapped", default=False, action="store_true", help="If an alignment is missing from predicted, assume the read is unmapped")
-    parser.add_argument("--truth", type=Path, help="True SAM/BAM/MAF (if using pbsim3 ground truth)")
-    parser.add_argument("--faidx", type=Path, help="faidx of the reference genome (needed for MAF ground truth)")
-    parser.add_argument("--ccs", dest="ccs_names", action="store_true", help="Input reads are produced by ccs (needed for MAF ground truth)")
-    parser.add_argument("--fastq", type=Path, help="Consensus HiFi reads (if --ccs and MAF ground truth)")
+    parser.add_argument("--truth", type=Path, help="True SAM/BAM/BED (if using pbsim3 ground truth)")
+    # parser.add_argument("--faidx", type=Path, help="faidx of the reference genome (needed for MAF ground truth)")
+    # parser.add_argument("--ccs", dest="ccs_names", action="store_true", help="Input reads are produced by ccs (needed for MAF ground truth)")
+    # parser.add_argument("--fastq", type=Path, help="Consensus HiFi reads (if --ccs and MAF ground truth)")
     parser.add_argument("--predicted", "--predicted_sam", "--predicted_paf", type=Path, help="Predicted SAM/BAM/PAF")
     parser.add_argument("--paf", dest="force_paf", action="store_true", help="Assume PAF input for predicted (usually autodetected, only needed if reading PAF from stdin)")
     parser.add_argument("--outfile", help="Path to file")
